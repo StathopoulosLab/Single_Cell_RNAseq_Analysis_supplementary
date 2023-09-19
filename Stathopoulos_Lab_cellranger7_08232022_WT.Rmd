@@ -1,0 +1,134 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(dplyr)
+library(Seurat)
+
+data_path<-"/home/fgao/Data_single_cell/Stathopoulos_Lab/SE8011/"
+dm.data<-Read10X_h5(paste(data_path, "cellranger_out/cellranger7_S1_dm6_transgene_out/outs/filtered_feature_bc_matrix.h5", sep=""), 
+                    use.names = TRUE, unique.features = TRUE)
+
+```
+
+
+```{r}
+
+dm<-CreateSeuratObject(dm.data, project = "cellranger")
+plot <- FeatureScatter(dm, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot
+dm[["percent.rRNA"]] <- PercentageFeatureSet(dm, pattern = "rRNA")
+VlnPlot(dm, features = c("nFeature_RNA", "nCount_RNA", "percent.rRNA"), ncol = 3, pt.size = 0)
+
+
+dm <- subset(dm, subset = nFeature_RNA < 7000 & nCount_RNA > 250 & nCount_RNA < 100000 & percent.rRNA<0.1)
+
+```
+
+
+#doublet detection and removal
+```{r}
+
+dm <- NormalizeData(dm, normalization.method = "LogNormalize", scale.factor = 10000)
+dm <- FindVariableFeatures(dm, selection.method = "vst", nfeatures = 2000)
+
+dm <- ScaleData(dm, verbose = FALSE, vars.to.regress = c("nCount_RNA"))
+dm <- RunPCA(dm, npcs = 60, ndims.print = 1:5, nfeatures.print = 5)
+ElbowPlot(dm, ndims = 60, reduction = "pca")
+
+# t-SNE and Clustering
+
+dm <- FindNeighbors(dm, reduction = "pca", dims = 1:30)
+
+dm <- RunTSNE(dm, dims = 1:30, check_duplicates = FALSE)
+dm <- RunUMAP(dm, dims = 1:30, check_duplicates = FALSE)
+
+library(DoubletFinder)
+
+nExp_dm <- round(ncol(dm) * 0.07)  # expect 7% doublets
+
+
+options(future.globals.maxSize= 1600*1024^2)
+
+dm <- doubletFinder_v3(dm, pN = 0.2, pK = 0.005, nExp = nExp_dm, PCs = 1:30, sct = TRUE)
+
+DF.name_dm = colnames(dm@meta.data)[grepl("DF.classification", colnames(dm@meta.data))]
+
+cowplot::plot_grid(ncol = 2, DimPlot(dm, group.by = "orig.ident") + NoAxes(), 
+    DimPlot(dm, group.by = DF.name_dm) + NoAxes())
+
+VlnPlot(dm, features = "nFeature_RNA", group.by = DF.name_dm, pt.size = 0)
+
+dm = dm[, dm@meta.data[, DF.name_dm] == "Singlet"]
+```
+
+
+#low resolution clustering
+```{r}
+
+data_path<-"/home/fgao/Data_single_cell/Stathopoulos_Lab/SE8011/"
+mtx_dm<-dm$RNA@counts
+
+dm <- CreateSeuratObject(mtx_dm, project = "wt")
+dm <- NormalizeData(dm, normalization.method = "LogNormalize", scale.factor = 10000)
+#dm <- FindVariableFeatures(dm, selection.method = "vst", nfeatures = 2000)
+dm <- FindVariableFeatures(dm, selection.method = "vst")
+dm <- ScaleData(dm, verbose = FALSE, vars.to.regress = c("nCount_RNA"))
+dm <- RunPCA(dm, npcs = 60, ndims.print = 1:5, nfeatures.print = 5)
+ElbowPlot(dm)
+
+dm <- FindNeighbors(dm, reduction = "pca", dims = 1:20)
+dm <- RunTSNE(dm, dims = 1:20, check_duplicates = FALSE)
+dm <- RunUMAP(dm, dims = 1:20, check_duplicates = FALSE)
+
+dm <- FindClusters(dm, resolution = 0.2)
+umap_cluster<-DimPlot(dm, reduction = "umap", group="seurat_clusters", label = TRUE)
+tsne_cluster<-DimPlot(dm, reduction = "tsne", group="seurat_clusters", label = TRUE)
+
+umap_cluster
+tsne_cluster
+
+data_id<-floor(runif(1, min=10000000, max=99999999))
+
+saveRDS(dm,file=paste(data_path, data_id, "_220901Sta.rds", sep=""),compress=F)
+
+```
+
+#Marker gene analysis
+```{r}
+
+library(dplyr)
+
+markers <- FindAllMarkers(dm, only.pos = T)
+write.table(markers, file=paste(data_path, file="markers_all_09012022.txt", sep=""), quote=F, sep="\t", col.names=T)
+
+markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_logFC) -> top10
+
+
+dm <- ScaleData(dm, features = rownames(dm))
+
+library(ggplot2)
+heatmap<-DoHeatmap(object = dm, features = top10$gene, size = 3, disp.min = -2, disp.max = 2, slot="scale.data") + scale_fill_gradientn(colors = c("blue", "white", "red"))
+heatmap
+
+
+svg(paste(data_path, "markers_heatmap_09012022.svg", sep=""), width=16, height=18)
+heatmap
+dev.off()
+
+png(paste(data_path, "markers_heatmap_09012022.png", sep=""), width=1280, height=1280)
+heatmap
+dev.off()
+
+```
+
+
+

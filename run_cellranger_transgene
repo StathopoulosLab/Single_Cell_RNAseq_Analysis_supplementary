@@ -1,0 +1,2 @@
+#!/bin/bash
+snakemake -s Snakefile_cellranger --cores 48

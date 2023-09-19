@@ -1,0 +1,690 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Visualization of cell clusters
+
+```{r}
+
+library(Seurat)
+library(ggplot2)
+
+data_path<-"/home/fgao/Data_single_cell/Stathopoulos_Lab/SE8011/"
+data_out<-"/home/fgao/Data_single_cell/Stathopoulos_Lab/scRNA_paper/"
+
+dm<-readRDS(paste(data_path, "76476877_220901Sta.rds", sep=""))
+umap<-DimPlot(dm, reduction = "umap", group="seurat_clusters", label = TRUE)
+umap
+
+library(svglite)
+svglite(paste(data_out, "umap_clusters.svg", sep=""), width=8, height=8)
+umap
+dev.off()
+
+library(gridExtra)
+cell_counts<-table(dm$seurat_clusters)
+grid.table(data.frame(cell_counts))
+svglite(paste(data_out, "cluster_cell_counts.svg", sep=""), height=4, width=8)
+grid.table(data.frame(cell_counts))
+dev.off()
+  
+svglite(paste(data_out, "umap_mCD8GFP.svg", sep=""), width=8, height=8)
+FeaturePlot(dm, features="mCD8GFP", cols = c("lightgrey", "red"))
+dev.off()
+
+svglite(paste(data_out, "umap_gcm.svg", sep=""), width=8, height=8)
+FeaturePlot(dm, features="gcm", cols = c("lightgrey", "red"))
+dev.off()
+
+svglite(paste(data_out, "umap_PPO1.svg", sep=""), width=8, height=8)
+FeaturePlot(dm, features="PPO1", cols = c("lightgrey", "red"))
+dev.off()
+
+p1<-DotPlot(dm, features=c("mCD8GFP", "gcm", "PPO1"), cols = c("lightgrey", "red"), dot.scale = 8)
+p2<-VlnPlot(dm, features=c("mCD8GFP", "gcm", "PPO1"), pt.size=0.01)
+svglite(paste(data_out, "violin_dot_selected.svg", sep=""), width=8, height=4)
+p1+p2
+dev.off()
+
+svglite(paste(data_out, "umap_figure1.svg", sep=""), width=40, height=64)
+FeaturePlot(dm, features=c("grh", "fkh", "twi", "oc", "cad", 
+                           "opa", "dhd", "Lac", "CadN", "htl",
+                           "sna", "zfh1", "tll", "rib", "DNaseII",
+                           "danr", "ich", "run", "mid", "mirr",
+                           "pxb", "comm", "btn", "HLH54F", "FoxL1",
+                           "Blimp-1", "salm", "Doc2", "byn", "EcR",
+                           "usp", "phm", "dib", "Npc2a", "E(spl)m5-HLH",
+                           "E(spl)mdelta-HLH"), cols = c("lightgrey", "red"))
+dev.off()
+
+
+
+```
+
+
+
+EnrichR analysis
+```{r}
+library(enrichR)
+listEnrichrSites()
+setEnrichrSite("FlyEnrichr")
+dbs <- listEnrichrDbs()
+dbs_sel<-c("GO_Biological_Process_2018")
+
+markers<-read.table(paste(data_path, "markers_all_09012022.txt", sep=""), header=T, row.names=1)
+go_result<-NULL
+for (i in unique(markers$cluster))
+  {
+    gene_sel<-rownames(markers[markers$cluster==i & markers$p_val_adj<0.05,])
+    terms_enriched<-enrichr(gene_sel, dbs_sel)
+    write.table(terms_enriched$GO_Biological_Process_2018, paste(data_out, "GO_BP_cluster_", i, ".txt", sep=""), quote=F, sep="\t")
+    go_result<-rbind(terms_enriched$GO_Biological_Process_2018[1:5,])
+    }
+  
+#   svglite(paste(data_out, "GO_BP_top20_cluster_", i, ".svg", sep=""), height=6, width=12)
+#    plotEnrich(terms_enriched$GO_Biological_Process_2018, showTerms = 20, numChar = 40, y = "Count", orderBy = "Adjusted.P.value")
+#    dev.off()
+ 
+```
+
+
+# gprofiler
+
+```{r}
+library(gprofiler2)
+
+markers<-read.table(paste(data_path, "markers_all_09012022.txt", sep=""), header=T, row.names=1)
+gene_list<-list()
+for (i in unique(markers$cluster))
+  {
+    gene_list[i+1]<- list(rownames(markers[markers$cluster==i & markers$p_val_adj<0.05,]))
+}
+
+    
+multi_go <- gost(query = gene_list, organism = "dmelanogaster", multi_query = TRUE, user_threshold = 0.05, correction_method = "fdr", significant = TRUE, measure_underrepresentation = FALSE, ordered_query = TRUE)
+
+multi_go_bp<-multi_go$result[multi_go$result$source=="GO:BP",]
+
+library("stringr")
+multi_go_bp_result<-t(data.frame(array(unlist(multi_go_bp$p_values), dim=c(12, nrow(multi_go_bp)))))
+
+rownames(multi_go_bp_result)<-multi_go_bp$term_name
+colnames(multi_go_bp_result)<-c(as.character((seq(0:11)-1)))
+
+term_all<-NULL
+for (i in seq(1:12))
+  {
+    term_i<-multi_go_bp_result[order(multi_go_bp_result[,i]),i]
+    term_i_out<-data.frame(GO_BP_term=names(term_i), FDR_value=term_i)
+    write.table(term_i_out, file=paste(data_out, "GO_BP_",i-1, ".txt", sep=""), quote=F, sep="\t", row.names=F)
+    term_all<-c(term_all, term_i_out$GO_BP_term[1:5])
+  }
+
+library(reshape2)
+multi_go_bp_result_melt<-melt(multi_go_bp_result[term_all, ])
+colnames(multi_go_bp_result_melt)<-c("Term", "Cluster")  
+multi_go_bp_result_melt$log10FDR<-(-1)*log10(multi_go_bp_result_melt[,3])
+multi_go_bp_result_melt[multi_go_bp_result_melt$log10FDR>10, 4]<-10
+
+p_go<-ggplot(multi_go_bp_result_melt, aes(Cluster, Term, fill=log10FDR)) + geom_tile() 
+p_go
+svglite(paste(data_out, "GO_BP_top5_terms.svg", sep=""), width=12, height=10)
+p_go
+dev.off()
+
+```
+
+
+
+#umap plots for selected clusters
+```{r}
+
+cells_c458<-subset(dm, subset= seurat_clusters==c(4,5,8))
+c458_p1<-DimPlot(cells_c458, reduction = "umap")
+c458_p1
+svglite(paste(data_out, "umap_c458.svg", sep=""), width=8, height=8)
+c458_p1
+dev.off()
+
+c458_p2<-FeaturePlot(cells_c458, features = c("opa", "grh", "CadN", "Lac", "dhd", "scw"), ncol=3, cols = c("lightgrey", "red"))
+c458_p2
+svglite(paste(data_out, "umap_c458_genes.svg", sep=""), width=12, height=8)
+c458_p2
+dev.off()
+c458_p2
+
+c458_p3<-VlnPlot(cells_c458, features = c("opa", "grh", "CadN", "Lac", "dhd", "scw"), ncol=3, pt.size=0.01)
+c458_p3
+svglite(paste(data_out, "violin_c458_genes.svg", sep=""), width=12, height=8)
+c458_p3
+dev.off()
+c458_p3
+
+c458_p4<-DotPlot(cells_c458, features = c("opa", "grh", "CadN", "Lac", "dhd", "scw"))
+c458_p4
+svglite(paste(data_out, "dotplot_c458_genes.svg", sep=""), width=12, height=8)
+c458_p4
+dev.off()
+c458_p4
+
+dm_pt<-dm
+dm_pt$group_pt<-dm_pt$seurat_clusters
+dm_pt$group_pt[dm_pt$group_pt != 4 & dm_pt$group_pt != 5 & dm_pt$group_pt != 8] <- NA
+Idents(dm_pt)<-dm_pt$group_pt
+
+p3_umap<-DimPlot(dm_pt, reduction = "umap", cols=c("red", "green", "blue", "grey"))
+p3_umap
+
+svglite(paste(data_out, "umap_c458_figure2.svg", sep=""), width=8, height=8)
+p3_umap
+dev.off()
+
+svglite(paste(data_out, "violin_c458_genes_figure2.svg", sep=""), width=12, height=4)
+VlnPlot(cells_c458, features = c("CadN", "grh", "dhd"), ncol=3, pt.size=0.01)
+dev.off()
+
+```
+
+
+```{r}
+
+library(Seurat)
+library(monocle)
+library(svglite)
+data_path<-"/home/fgao/Data_single_cell/Stathopoulos_Lab/SE8011/"
+data_out<-"/home/fgao/Data_single_cell/Stathopoulos_Lab/scRNA_paper/"
+dm<-readRDS(paste(data_path, "76476877_220901Sta.rds", sep=""))
+
+dm_c9<-subset(dm, idents=9)
+mtx_dm_c9<-dm_c9$RNA@counts
+dm_c9 <- CreateSeuratObject(mtx_dm_c9, project = "c9")
+dm_c9 <- NormalizeData(dm_c9, normalization.method = "LogNormalize", scale.factor = 10000)
+dm_c9 <- FindVariableFeatures(dm_c9, selection.method = "vst")
+var_genes_c9 <- VariableFeatures(dm_c9)[1:500]
+
+data_monocle_c9 <- as(as.matrix(mtx_dm_c9), 'sparseMatrix')
+
+sample_sheet <- data.frame(barcode=colnames(dm_c9), cluster=dm_c9$orig.ident)
+rownames(sample_sheet) <- sample_sheet$barcode
+
+pd <- new("AnnotatedDataFrame", data = sample_sheet)
+fData <- data.frame(gene_short_name = row.names(data_monocle_c9), row.names = row.names(data_monocle_c9))
+fd <- new('AnnotatedDataFrame', data = fData)
+
+#Construct monocle cds
+monocle_cds <- newCellDataSet(data_monocle_c9,
+                         phenoData = pd,
+                         featureData = fd,
+                         lowerDetectionLimit = 0.5,
+                         expressionFamily = negbinomial.size())
+
+monocle_cds <- estimateSizeFactors(monocle_cds)
+
+monocle_cds <- detectGenes(monocle_cds, min_expr = 0.1)
+
+#ordering_genes <- row.names(clustering_DEG_genes)[order(clustering_DEG_genes$qval)][1:2000]
+monocle_cds <- setOrderingFilter(monocle_cds, ordering_genes = var_genes_c9)
+monocle_cds <- reduceDimension(monocle_cds, method = 'DDRTree')
+#monocle_cds <- orderCells(monocle_cds)
+
+monocle_cds <- orderCells(monocle_cds)
+#plot_pseudotime1<-plot_cell_trajectory(monocle_cds, color_by = 'as.factor(cluster)', cell_size=1)
+#plot_pseudotime1
+
+plot_pseudotime2<-plot_cell_trajectory(monocle_cds, color_by = 'State', cell_size=1)
+plot_pseudotime2
+svglite(paste(data_out, "pseudotime_c9_states.svg", sep=""), width=12, height=8)
+plot_pseudotime2
+dev.off()
+
+#plot_pseudotime3<-plot_cell_trajectory(monocle_cds, color_by = 'Pseudotime', cell_size=1)
+#plot_pseudotime3
+
+to_be_tested1 <- row.names(subset(fData(monocle_cds),
+gene_short_name %in% c("sna", "byn", "Abd-B", "cad", "FoxL1", "Ptx1", "Blimp-1", "salm", "kon", "HLH54F", "tey", "Doc2")))
+cds_subset1 <- monocle_cds[to_be_tested1,]
+
+to_be_tested2 <- row.names(subset(fData(monocle_cds),
+gene_short_name %in% c("sna", "Grip", "FoxL1", "Ptx1", "Blimp-1", "salm", "kon", "tey")))
+cds_subset2 <- monocle_cds[to_be_tested2,]
+
+p3_violin<-plot_genes_violin(cds_subset2, grouping = "State", min_expr = 0.1, color_by = "State", ncol = 3, cell_size = 0.5, relative_expr = TRUE)
+p3_violin
+svglite(paste(data_out, "pseudotime_c9_violin_sfigure7.svg", sep=""), width=16, height=8)
+p3_violin
+dev.off()
+
+
+#project pseudotime value on UMAP
+dm_pt<-dm
+dm_pt$group_pt<-dm_pt$seurat_clusters
+dm_pt$group_pt[dm_pt$group_pt != 9] <- NA
+Idents(dm_pt)<-dm_pt$group_pt
+
+dm_pt$Pseudotime<-rep(NA, length(dm_pt$orig.ident))
+dm_pt$Pseudotime[dm_pt$seurat_clusters ==9]<-monocle_cds$Pseudotime
+
+p3_umap<-DimPlot(dm_pt, reduction = "umap", cols=c("red", "grey"))
+p3_umap_pt<-FeaturePlot(dm_pt, features = "Pseudotime", cols=c("cyan", "blue"))
+
+p3_umap + p3_umap_pt
+
+svglite(paste(data_out, "umap_c9_pt.svg", sep=""), width=16, height=8)
+p3_umap + p3_umap_pt
+dev.off()
+
+dm_sel<-dm
+mtx_dm<-dm_sel$RNA@counts
+#list_sel<-c("sna", "byn", "Doc2", "HLH54F", "FoxL1", "Blimp-1", "salm")
+list_sel<-c("htl", "opa", "run", "Ptx1", "Grip")
+mtx_genes_sel<-data.frame(t(mtx_dm[list_sel, ]))
+mtx_genes_sel$group<-dm_sel$seurat_clusters
+mtx_genes_sel[mtx_genes_sel$group!=9, ]<-NA
+dm_sel@meta.data<-cbind(dm_sel@meta.data, mtx_genes_sel)
+
+p3_umap_genes<-FeaturePlot(dm_sel, features=colnames(mtx_genes_sel)[1:length(list_sel)], ncol=3)
+p3_umap_genes
+svglite(paste(data_out, "umap_c9_genes_figure7.svg", sep=""), width=12, height=8)
+p3_umap_genes
+dev.off()
+
+list_heatmap<-c("Abd-B","Blimp-1","ken","salm","dan","run","dpn","prd","FoxL1","insv","danr",
+"cad","sna","opa","disco","SNCF","CG5555","thw","Grip","Shal","Scgdelta","Pdp1","Fas2","tey","beat-IIb",
+"Doc1","H2.0","kon","beat-IIa","CG6465","Doc2","HLH54F","Sox14","nvy","Ptx1","bowl","fkh","Kr","srp")
+
+dm_c9<-subset(dm, idents=9)
+Idents(dm_c9)<-monocle_cds$State
+p3_pt_heatmap<-DoHeatmap(dm_c9, features=list_heatmap, size = 3, disp.min = -2, disp.max = 2, slot="scale.data") + scale_fill_gradientn(colors = c("blue", "white", "red"))
+p3_pt_heatmap
+svglite(paste(data_out, "pseudotime_c9_heatmap.svg", sep=""), width=12, height=12)
+p3_pt_heatmap
+dev.off()
+
+#dm_c9$State<-monocle_cds$State
+#Idents(dm_c9)<-dm_c9$State
+#all.markers <- FindAllMarkers(object = dm_c9, only.pos = TRUE)
+#all.markers_sig<-all.markers[all.markers$p_val_adj<0.05, ]
+#write.table(all.markers_sig, file=paste(data_path, "trajectory_states_DEG_c9.txt", sep=""), quote=F, sep="\t")
+
+all.markers_sig<-read.table(paste(data_path, "trajectory_states_DEG_c9.txt", sep=""), header=T, row.names=1)
+p3_pt_heatmap<-DoHeatmap(dm_c9, features=rownames(all.markers_sig), size = 3, disp.min = -2, disp.max = 2, slot="scale.data") + scale_fill_gradientn(colors = c("blue", "white", "red"))
+p3_pt_heatmap
+svglite(paste(data_out, "pseudotime_c9_heatmap_all_sig.svg", sep=""), width=12, height=20)
+p3_pt_heatmap
+dev.off()
+
+
+
+```
+
+
+
+# Use subsets of cell clusters to generate pseudotime, re-clustering of c0
+
+```{r}
+
+library(Seurat)
+library(monocle)
+
+data_path<-"/home/fgao/Data_single_cell/Stathopoulos_Lab/SE8011/"
+dm<-readRDS(paste(data_path, "76476877_220901Sta.rds", sep=""))
+
+dm_c0<-subset(dm, idents=c(0))
+mtx_dm_c0<-dm_c0$RNA@counts
+dm_c0 <- CreateSeuratObject(mtx_dm_c0, project = "c0")
+dm_c0 <- NormalizeData(dm_c0, normalization.method = "LogNormalize", scale.factor = 10000)
+dm_c0 <- FindVariableFeatures(dm_c0, selection.method = "vst")
+var_genes_c0 <- VariableFeatures(dm_c0)[1:500]
+
+data_monocle_c0 <- as(as.matrix(mtx_dm_c0), 'sparseMatrix')
+
+sample_sheet <- data.frame(barcode=colnames(dm_c0), cluster=dm_c0$orig.ident)
+rownames(sample_sheet) <- sample_sheet$barcode
+
+pd <- new("AnnotatedDataFrame", data = sample_sheet)
+fData <- data.frame(gene_short_name = row.names(data_monocle_c0), row.names = row.names(data_monocle_c0))
+fd <- new('AnnotatedDataFrame', data = fData)
+
+#Construct monocle cds
+monocle_cds <- newCellDataSet(data_monocle_c0,
+                         phenoData = pd,
+                         featureData = fd,
+                         lowerDetectionLimit = 0.5,
+                         expressionFamily = negbinomial.size())
+
+monocle_cds <- estimateSizeFactors(monocle_cds)
+
+monocle_cds <- detectGenes(monocle_cds, min_expr = 0.1)
+
+#ordering_genes <- row.names(clustering_DEG_genes)[order(clustering_DEG_genes$qval)][1:2000]
+monocle_cds <- setOrderingFilter(monocle_cds, ordering_genes = var_genes_c0)
+monocle_cds <- reduceDimension(monocle_cds, method = 'DDRTree')
+#monocle_cds <- orderCells(monocle_cds)
+
+monocle_cds <- orderCells(monocle_cds)
+#plot_pseudotime1<-plot_cell_trajectory(monocle_cds, color_by = 'as.factor(cluster)', cell_size=1)
+#plot_pseudotime1
+
+plot_pseudotime2<-plot_cell_trajectory(monocle_cds, color_by = 'State', cell_size=1)
+plot_pseudotime2
+svglite(paste(data_out, "pseudotime_c0_states.svg", sep=""), width=12, height=8)
+plot_pseudotime2
+dev.off()
+
+#plot_pseudotime3<-plot_cell_trajectory(monocle_cds, color_by = 'Pseudotime', cell_size=1)
+#plot_pseudotime3
+
+to_be_tested1 <- row.names(subset(fData(monocle_cds),
+gene_short_name %in% c("odd", "mid", "mirr", "btn", "drl", "hh", "en", "run", "wg", "aos", "slp2", "pxb", "comm", "Tl", "Tollo", "18w", "Toll-6", "Toll-7", "twi", "stg", "opa", "sna")))
+cds_subset1 <- monocle_cds[to_be_tested1,]
+
+to_be_tested2 <- row.names(subset(fData(monocle_cds), gene_short_name %in% c("danr", "slp2", "bap", "aos")))
+cds_subset2 <- monocle_cds[to_be_tested2,]
+
+p4_violin<-plot_genes_violin(cds_subset2, grouping = "State", min_expr = 0.1, color_by = "State", ncol = 2, cell_size = 0.5, relative_expr = TRUE)
+p4_violin
+
+svglite(paste(data_out, "pseudotime_c0_violin_sfigure5.svg", sep=""), width=8, height=8)
+p4_violin
+dev.off()
+
+#dm_c0$State<-monocle_cds$State
+#Idents(dm_c0)<-dm_c0$State
+#all.markers <- FindAllMarkers(object = dm_c0, only.pos = TRUE)
+#all.markers_sig<-all.markers[all.markers$p_val_adj<0.05, ]
+#write.table(all.markers_sig, file=paste(data_path, "trajectory_states_DEG_c0.txt", sep=""), quote=F, sep="\t")
+
+
+#project pseudotime value on UMAP
+dm_pt<-dm
+dm_pt$group_pt<-dm_pt$seurat_clusters
+dm_pt$group_pt[dm_pt$group_pt != 0] <- NA
+Idents(dm_pt)<-dm_pt$group_pt
+
+dm_pt$Pseudotime<-rep(NA, length(dm_pt$orig.ident))
+dm_pt$Pseudotime[dm_pt$seurat_clusters ==0]<-monocle_cds$Pseudotime
+
+p4_umap<-DimPlot(dm_pt, reduction = "umap", cols=c("red", "grey"))
+p4_umap_pt<-FeaturePlot(dm_pt, features = "Pseudotime", cols=c("cyan", "blue"))
+
+p4_umap + p4_umap_pt
+
+svglite(paste(data_out, "umap_c0_pt.svg", sep=""), width=16, height=8)
+p4_umap + p4_umap_pt
+dev.off()
+
+dm_sel<-dm
+mtx_dm<-dm_sel$RNA@counts
+list_sel<-c("sna", "opa", "danr")
+mtx_genes_sel<-data.frame(t(mtx_dm[list_sel, ]))
+mtx_genes_sel$group<-dm_sel$seurat_clusters
+mtx_genes_sel[mtx_genes_sel$group!=0, ]<-NA
+dm_sel@meta.data<-cbind(dm_sel@meta.data, mtx_genes_sel)
+
+p4_umap_genes<-FeaturePlot(dm_sel, features=colnames(mtx_genes_sel)[1:length(list_sel)], ncol=3)
+p4_umap_genes
+svglite(paste(data_out, "umap_c0_genes.svg", sep=""), width=12, height=4)
+p4_umap_genes
+dev.off()
+
+list_heatmap<-c("opa","dan","sna","CG9005","danr","insv","sprt","Mdr49","SNCF","ich","mid","mirr","bap","btn",
+"drl","hh","en","mirr","slp2","Ppn","comm","pxb","wg","slp1","aos","sli","slp1","wg","slp2","pxb","comm"
+)
+
+dm_c0<-subset(dm, idents=0)
+Idents(dm_c0)<-monocle_cds$State
+p4_pt_heatmap<-DoHeatmap(dm_c0, features=list_heatmap, size = 3, disp.min = -2, disp.max = 2, slot="scale.data") + scale_fill_gradientn(colors = c("blue", "white", "red"))
+p4_pt_heatmap
+svglite(paste(data_out, "pseudotime_c0_heatmap.svg", sep=""), width=12, height=12)
+p4_pt_heatmap
+dev.off()
+
+all.markers_sig<-read.table(paste(data_path, "trajectory_states_DEG_c0.txt", sep=""), header=T, row.names=1)
+p5_pt_heatmap<-DoHeatmap(dm_c0, features=rownames(all.markers_sig), size = 3, disp.min = -2, disp.max = 2, slot="scale.data") + scale_fill_gradientn(colors = c("blue", "white", "red"))
+p5_pt_heatmap
+svglite(paste(data_out, "pseudotime_c0_heatmap_all_sig.svg", sep=""), width=12, height=20)
+p5_pt_heatmap
+dev.off()
+
+
+```
+
+
+# umap highlighting c0, c2 genes 
+```{r}
+
+dm_pt<-dm
+dm_pt$group_pt<-dm_pt$seurat_clusters
+dm_pt$group_pt[dm_pt$group_pt != 0 & dm_pt$group_pt !=2] <- NA
+Idents(dm_pt)<-dm_pt$group_pt
+
+p6_umap<-DimPlot(dm_pt, reduction = "umap", cols=c("red", "orange", "grey"))
+
+p6_umap 
+
+svglite(paste(data_out, "umap_c0c2.svg", sep=""), width=8, height=8)
+p6_umap
+dev.off()
+
+dm_sel<-dm
+mtx_dm<-dm_sel$RNA@counts
+list_sel<-c("phm", "dib", "Npc2a", "jeb", "E(spl)mdelta-HLH", "E(spl)m5-HLH")
+mtx_genes_sel<-data.frame(t(mtx_dm[list_sel, ]))
+mtx_genes_sel$group<-dm_sel$seurat_clusters
+mtx_genes_sel[mtx_genes_sel$group!=0 & mtx_genes_sel$group!=2, ]<-NA
+dm_sel@meta.data<-cbind(dm_sel@meta.data, mtx_genes_sel)
+
+p6_umap_genes<-FeaturePlot(dm_sel, features=colnames(mtx_genes_sel)[1:length(list_sel)], ncol=3)
+p6_umap_genes
+
+svglite(paste(data_out, "umap_c0c2_genes.svg", sep=""), width=12, height=8)
+p6_umap_genes
+dev.off()
+
+```
+
+
+
+#subclustering c8
+```{r}
+
+library(Seurat)
+library(monocle)
+
+data_path<-"/home/fgao/Data_single_cell/Stathopoulos_Lab/SE8011/"
+dm<-readRDS(paste(data_path, "76476877_220901Sta.rds", sep=""))
+
+dm_c8<-subset(dm, idents=c(8))
+mtx_dm_c8<-dm_c8$RNA@counts
+dm_c8 <- CreateSeuratObject(mtx_dm_c8, project = "c8")
+dm_c8 <- NormalizeData(dm_c8, normalization.method = "LogNormalize", scale.factor = 10000)
+dm_c8 <- FindVariableFeatures(dm_c8, selection.method = "vst")
+dm_c8 <- ScaleData(dm_c8, verbose = FALSE, vars.to.regress = c("nCount_RNA"))
+dm_c8 <- RunPCA(dm_c8, npcs = 60, ndims.print = 1:5, nfeatures.print = 5)
+ElbowPlot(dm, ndims=50)
+
+dm_c8 <- FindNeighbors(dm_c8, reduction = "pca", dims = 1:20)
+dm_c8 <- RunTSNE(dm_c8, dims = 1:20, check_duplicates = FALSE)
+dm_c8 <- RunUMAP(dm_c8, dims = 1:20, check_duplicates = FALSE)
+
+dm_c8 <- FindClusters(dm_c8, resolution = 0.5)
+umap_cluster<-DimPlot(dm_c8, reduction = "umap", group="seurat_clusters", label = TRUE)
+tsne_cluster<-DimPlot(dm_c8, reduction = "tsne", group="seurat_clusters", label = TRUE)
+
+umap_cluster
+tsne_cluster
+
+FeaturePlot(dm_c8, features=c("pgc", "nos", "tll", "fkh"), ncol=2)
+
+
+data_out<-"/home/fgao/Data_single_cell/Stathopoulos_Lab/scRNA_paper/"
+
+svg(paste(data_out, "umap_subclusters_c8.svg", sep=""), width=6, height=6)
+umap_cluster
+dev.off()
+
+all.markers <- FindAllMarkers(object = dm_c8, only.pos = TRUE)
+all.markers_sig<-all.markers[all.markers$p_val_adj<0.05, ]
+write.table(all.markers_sig, file=paste(data_out, "subclusters_DEG_c8.txt", sep=""), quote=F, sep="\t")
+
+all.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_logFC) -> top10
+
+
+dm_c8 <- ScaleData(dm_c8, features = rownames(dm_c8))
+
+library(ggplot2)
+heatmap<-DoHeatmap(object = dm_c8, features = top10$gene, size = 3, disp.min = -2, disp.max = 2, slot="scale.data") + scale_fill_gradientn(colors = c("blue", "white", "red"))
+h1<-heatmap
+h1
+
+svg(paste(data_out, "heatmap_subclusters_c8.svg", sep=""), width=6, height=9)
+h1
+dev.off()
+
+c8_umap<-FeaturePlot(dm_c8, features=c("dhd", "pgc", "stg", "rib", "zen", "tll", "ftz", "fkh", "CG42342", "Psc", "salm", "Abd-B"), ncol=3)
+c8_umap
+
+svglite(paste(data_out, "umap_c8_sub_figure3.svg", sep=""), width=12, height=16)
+c8_umap
+dev.off()
+
+```
+
+
+#subclustering c4
+```{r}
+
+library(Seurat)
+
+data_path<-"/home/fgao/Data_single_cell/Stathopoulos_Lab/SE8011/"
+dm<-readRDS(paste(data_path, "76476877_220901Sta.rds", sep=""))
+
+dm_c4<-subset(dm, idents=c(4))
+mtx_dm_c4<-dm_c4$RNA@counts
+dm_c4 <- CreateSeuratObject(mtx_dm_c4, project = "c4")
+dm_c4 <- NormalizeData(dm_c4, normalization.method = "LogNormalize", scale.factor = 10000)
+dm_c4 <- FindVariableFeatures(dm_c4, selection.method = "vst")
+dm_c4 <- ScaleData(dm_c4, verbose = FALSE, vars.to.regress = c("nCount_RNA"))
+dm_c4 <- RunPCA(dm_c4, npcs = 60, ndims.print = 1:5, nfeatures.print = 5)
+ElbowPlot(dm_c4, ndims=50)
+
+dm_c4 <- FindNeighbors(dm_c4, reduction = "pca", dims = 1:20)
+dm_c4 <- RunTSNE(dm_c4, dims = 1:20, check_duplicates = FALSE)
+dm_c4 <- RunUMAP(dm_c4, dims = 1:20, check_duplicates = FALSE)
+
+dm_c4 <- FindClusters(dm_c4, resolution = 0.5)
+umap_cluster<-DimPlot(dm_c4, reduction = "umap", group="seurat_clusters", label = TRUE)
+tsne_cluster<-DimPlot(dm_c4, reduction = "tsne", group="seurat_clusters", label = TRUE)
+
+umap_cluster
+tsne_cluster
+
+FeaturePlot(dm_c4, features=c("pgc", "nos", "tll", "fkh"), ncol=2)
+
+
+data_out<-"/home/fgao/Data_single_cell/Stathopoulos_Lab/scRNA_paper/"
+
+svg(paste(data_out, "umap_subclusters_c4.svg", sep=""), width=6, height=6)
+umap_cluster
+dev.off()
+
+all.markers <- FindAllMarkers(object = dm_c4, only.pos = TRUE)
+all.markers_sig<-all.markers[all.markers$p_val_adj<0.05, ]
+write.table(all.markers_sig, file=paste(data_out, "subclusters_DEG_c4.txt", sep=""), quote=F, sep="\t")
+
+all.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_logFC) -> top10
+
+
+dm_c4 <- ScaleData(dm_c4, features = rownames(dm_c4))
+
+library(ggplot2)
+heatmap<-DoHeatmap(object = dm_c4, features = top10$gene, size = 3, disp.min = -2, disp.max = 2, slot="scale.data") + scale_fill_gradientn(colors = c("blue", "white", "red"))
+h1<-heatmap
+h1
+
+svg(paste(data_out, "heatmap_subclusters_c4.svg", sep=""), width=6, height=9)
+h1
+dev.off()
+
+c4_umap<-FeaturePlot(dm_c4, features=c("hth", "CathD", "Lac", "ths", "peb", "ps", "SNCF", "CG14317", "Blimp1", "oc", "prd", "eve", "h", "pgc", "tll", "zfh1", "CadN", "twi", "stg"), ncol=3)
+c4_umap
+
+svglite(paste(data_out, "umap_c4_sub_figure3.svg", sep=""), width=12, height=28)
+c4_umap
+dev.off()
+
+```
+
+
+#subclustering c5
+```{r}
+
+library(Seurat)
+
+data_path<-"/home/fgao/Data_single_cell/Stathopoulos_Lab/SE8011/"
+dm<-readRDS(paste(data_path, "76476877_220901Sta.rds", sep=""))
+
+dm_c5<-subset(dm, idents=c(5))
+mtx_dm_c5<-dm_c5$RNA@counts
+dm_c5 <- CreateSeuratObject(mtx_dm_c5, project = "c5")
+dm_c5 <- NormalizeData(dm_c5, normalization.method = "LogNormalize", scale.factor = 10000)
+dm_c5 <- FindVariableFeatures(dm_c5, selection.method = "vst")
+dm_c5 <- ScaleData(dm_c5, verbose = FALSE, vars.to.regress = c("nCount_RNA"))
+dm_c5 <- RunPCA(dm_c5, npcs = 60, ndims.print = 1:5, nfeatures.print = 5)
+ElbowPlot(dm_c5, ndims=50)
+
+dm_c5 <- FindNeighbors(dm_c5, reduction = "pca", dims = 1:20)
+dm_c5 <- RunTSNE(dm_c5, dims = 1:20, check_duplicates = FALSE)
+dm_c5 <- RunUMAP(dm_c5, dims = 1:20, check_duplicates = FALSE)
+
+dm_c5 <- FindClusters(dm_c5, resolution = 0.5)
+umap_cluster<-DimPlot(dm_c5, reduction = "umap", group="seurat_clusters", label = TRUE)
+tsne_cluster<-DimPlot(dm_c5, reduction = "tsne", group="seurat_clusters", label = TRUE)
+
+umap_cluster
+tsne_cluster
+
+FeaturePlot(dm_c5, features=c("pgc", "nos", "tll", "fkh"), ncol=2)
+
+
+data_out<-"/home/fgao/Data_single_cell/Stathopoulos_Lab/scRNA_paper/"
+
+svg(paste(data_out, "umap_subclusters_c5.svg", sep=""), width=6, height=6)
+umap_cluster
+dev.off()
+
+all.markers <- FindAllMarkers(object = dm_c5, only.pos = TRUE)
+all.markers_sig<-all.markers[all.markers$p_val_adj<0.05, ]
+write.table(all.markers_sig, file=paste(data_out, "subclusters_DEG_c5.txt", sep=""), quote=F, sep="\t")
+
+all.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_logFC) -> top10
+
+
+dm_c5 <- ScaleData(dm_c5, features = rownames(dm_c5))
+
+library(ggplot2)
+heatmap<-DoHeatmap(object = dm_c5, features = top10$gene, size = 3, disp.min = -2, disp.max = 2, slot="scale.data") + scale_fill_gradientn(colors = c("blue", "white", "red"))
+h1<-heatmap
+h1
+
+svg(paste(data_out, "heatmap_subclusters_c5.svg", sep=""), width=6, height=9)
+h1
+dev.off()
+
+c5_umap<-FeaturePlot(dm_c5, features=c("Lac", "grh", "sog", "ths", "pyr", "CadN", "htl", "zfh1", "rib", "mCD8GFP", "twi", "stg", "Pdp1", "DNaseII"), ncol=3)
+c5_umap
+
+svglite(paste(data_out, "umap_c5_sub_figure3.svg", sep=""), width=12, height=20)
+c5_umap
+dev.off()
+
+
+```
+

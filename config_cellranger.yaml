@@ -1,0 +1,6 @@
+CELLRANGER: /home/fgao/software/cellranger-7.0.1/cellranger
+THREAD: 48
+OUTPUT: cellranger7_S1_dm6_transgene
+INDEX: /home/fgao/refdata-cellranger-dm6-3.1.0/dm6_transgene
+FASTQS: fastq/
+SAMPLE: SE8011_SA158167
